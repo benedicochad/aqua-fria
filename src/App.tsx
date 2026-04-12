@@ -36,16 +36,23 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
 
-  // 🔄 Fetch Products from Supabase on load
+  // 🛠️ Admin States
+  const [showProductForm, setShowProductForm] = useState(false);
+  const [editProductId, setEditProductId] = useState<number | null>(null);
+  const [productName, setProductName] = useState("");
+  const [productPrice, setProductPrice] = useState<number | "">("");
+
+  // 🔄 Fetch Products from Supabase
+  const fetchProducts = async () => {
+    const { data, error } = await supabase.from("products").select("*").order("id");
+    if (data && !error) setProducts(data);
+  };
+
   useEffect(() => {
-    const fetchProducts = async () => {
-      const { data, error } = await supabase.from("products").select("*").order("id");
-      if (data && !error) setProducts(data);
-    };
     fetchProducts();
   }, []);
 
-  // 🔐 LOGIN HANDLER (Reliant on Supabase)
+  // 🔐 LOGIN HANDLER
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!mobile.trim() || !password.trim()) {
@@ -72,7 +79,7 @@ export default function App() {
     }
   };
 
-  // 📝 REGISTER HANDLER (Reliant on Supabase)
+  // 📝 REGISTER HANDLER
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!username.trim() || !mobile.trim() || !password.trim()) {
@@ -83,7 +90,7 @@ export default function App() {
     setIsLoading(true);
     
     // Check if mobile already exists in DB
-    const { data: existingUser, error: searchError } = await supabase
+    const { data: existingUser } = await supabase
       .from("users")
       .select("id")
       .eq("mobile", mobile)
@@ -95,16 +102,15 @@ export default function App() {
       return;
     }
 
-    // Insert new user into Supabase
+    // Insert new user into Supabase (Defaulting to customer role)
     const { error: insertError } = await supabase.from("users").insert([
-      { mobile, password, name: username, email: email || null }
+      { mobile, password, name: username, email: email || null, role: "customer" }
     ]);
 
     setIsLoading(false);
 
     if (insertError) {
       alert(`Registration failed: ${insertError.message}`);
-      console.error("Supabase Insert Error:", insertError);
     } else {
       alert("Registration successful! You can now log in.");
       setUsername(""); setEmail(""); setMobile(""); setPassword("");
@@ -118,9 +124,66 @@ export default function App() {
     setEmail(""); setPassword(""); setUsername(""); setMobile("");
     setIsLoginView(true);
     setCart([]); 
+    resetAdminForm();
   };
 
-  // 🛒 CART LOGIC
+  // ================= ADMIN FUNCTIONS =================
+
+  const resetAdminForm = () => {
+    setProductName("");
+    setProductPrice("");
+    setEditProductId(null);
+    setShowProductForm(false);
+  };
+
+  const handleEditClick = (product: Product) => {
+    setProductName(product.name);
+    setProductPrice(product.price);
+    setEditProductId(product.id);
+    setShowProductForm(true);
+  };
+
+  const handleSaveProduct = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!productName.trim() || productPrice === "") return;
+
+    setIsLoading(true);
+    const priceNum = Number(productPrice);
+
+    if (editProductId) {
+      // UPDATE EXISTING PRODUCT
+      const { error } = await supabase
+        .from("products")
+        .update({ name: productName, price: priceNum })
+        .eq("id", editProductId);
+
+      if (!error) {
+        setProducts(products.map(p => p.id === editProductId ? { ...p, name: productName, price: priceNum } : p));
+        alert("Product updated successfully!");
+      } else {
+        alert("Failed to update product.");
+      }
+    } else {
+      // ADD NEW PRODUCT
+      const { data, error } = await supabase
+        .from("products")
+        .insert([{ name: productName, price: priceNum }])
+        .select()
+        .single();
+
+      if (!error && data) {
+        setProducts([...products, data]);
+        alert("Product added successfully!");
+      } else {
+        alert("Failed to add product.");
+      }
+    }
+
+    setIsLoading(false);
+    resetAdminForm();
+  };
+
+  // ================= CART LOGIC =================
   const addToOrder = (product: Product) => {
     setCart((prevCart) => {
       const existingItem = prevCart.find((item) => item.id === product.id);
@@ -145,13 +208,10 @@ export default function App() {
 
   const orderTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  // ✅ PLACE ORDER (Save to DB)
   const handlePlaceOrder = async () => {
     if (cart.length === 0 || !user) return;
-    
     setIsLoading(true);
 
-    // 1. Create the Order entry
     const { data: orderData, error: orderError } = await supabase
       .from("orders")
       .insert([{ user_id: user.id, total_amount: orderTotal }])
@@ -164,7 +224,6 @@ export default function App() {
       return;
     }
 
-    // 2. Insert Order Items
     const orderItems = cart.map((item) => ({
       order_id: orderData.id,
       product_id: item.id,
@@ -173,7 +232,6 @@ export default function App() {
     }));
 
     const { error: itemsError } = await supabase.from("order_items").insert(orderItems);
-
     setIsLoading(false);
 
     if (!itemsError) {
@@ -184,7 +242,9 @@ export default function App() {
     }
   };
 
-  // ================= AUTHENTICATION PAGE =================
+  // ================= RENDER LOGIC =================
+
+  // 1. AUTHENTICATION VIEW
   if (!user) {
     return (
       <div className="login-container">
@@ -224,7 +284,69 @@ export default function App() {
     );
   }
 
-  // ================= DASHBOARD =================
+  // 2. ADMIN DASHBOARD VIEW
+  if (user.role === "admin") {
+    return (
+      <div className="dashboard-wrapper">
+        <div className="header animate-fade">
+          <div>
+            <h2 style={{ color: "#f87171" }}>🛠️ Admin Dashboard</h2>
+            <p style={{ marginTop: "5px", color: "#94a3b8" }}>
+              Welcome back, <strong>{user.name}</strong> <span className="role-badge" style={{ backgroundColor: "#f87171" }}>Admin</span>
+            </p>
+          </div>
+          <button className="button btn-danger" onClick={handleLogout}>Logout</button>
+        </div>
+
+        <div className="dashboard-grid" style={{ gridTemplateColumns: "1fr" }}>
+          <div className="card animate-fade delay-1">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <h3 className="card-title" style={{ margin: 0 }}>📦 Manage Inventory</h3>
+              <button className="button btn-success" style={{ width: "auto", margin: 0 }} onClick={() => setShowProductForm(!showProductForm)}>
+                {showProductForm ? "Cancel" : "+ Add New Item"}
+              </button>
+            </div>
+
+            {/* Admin Add/Edit Form */}
+            {showProductForm && (
+              <form onSubmit={handleSaveProduct} style={{ display: "flex", gap: "10px", marginBottom: "20px", padding: "15px", backgroundColor: "#1e293b", borderRadius: "8px" }}>
+                <input className="input" style={{ margin: 0 }} type="text" placeholder="Item Name" value={productName} onChange={(e) => setProductName(e.target.value)} required />
+                <input className="input" style={{ margin: 0 }} type="number" placeholder="Price (₱)" value={productPrice} onChange={(e) => setProductPrice(e.target.value === "" ? "" : Number(e.target.value))} required />
+                <button className="button" style={{ width: "auto", margin: 0 }} type="submit" disabled={isLoading}>
+                  {isLoading ? "Saving..." : editProductId ? "Update Item" : "Save Item"}
+                </button>
+              </form>
+            )}
+
+            {/* Product List for Admin */}
+            <div>
+              {products.length === 0 ? (
+                <p style={{ color: "#94a3b8", fontStyle: "italic" }}>No items in database.</p>
+              ) : (
+                products.map((product) => (
+                  <div key={product.id} className="product" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <p className="product-name">{product.name}</p>
+                      <p className="product-price">₱{product.price}</p>
+                    </div>
+                    <button 
+                      className="button btn-outline" 
+                      style={{ width: "auto", padding: "8px 16px", margin: 0 }} 
+                      onClick={() => handleEditClick(product)}
+                    >
+                      ✏️ Edit
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. CUSTOMER DASHBOARD VIEW
   return (
     <div className="dashboard-wrapper">
       <div className="header animate-fade">
