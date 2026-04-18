@@ -407,7 +407,7 @@ export default function App() {
           {isLoginView ? (
             <form onSubmit={handleLogin} className="login-form">
               <div className="form-group">
-                <label>Mobile Number (Admin demo: 09123456789 / admin123)</label>
+                <label>Mobile Number</label>
                 <input
                   type="text"
                   className="custom-input"
