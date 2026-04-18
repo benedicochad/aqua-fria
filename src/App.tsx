@@ -148,7 +148,6 @@ export default function App() {
     e.preventDefault();
     setIsLoading(true);
 
-    // HIDDEN ADMIN LOGIN (quick access to admin dashboard)
     if (mobile === "09123456789" && password === "admin123") {
       setUser({
         id: "admin-hidden",
@@ -164,7 +163,6 @@ export default function App() {
       return;
     }
 
-    // Normal customer / registered user login
     const { data, error } = await supabase
       .from("users")
       .select("*")
@@ -369,7 +367,7 @@ export default function App() {
     setIsLoading(false);
   };
 
-  // Computations
+  // Computations (lowStockItems removed to fix TS error)
   const adminTotalRev = ordersList.filter(o => o.status === "delivered").reduce((sum, o) => sum + o.total, 0);
   const adminActiveOrders = ordersList.filter(o => !["delivered", "cancelled"].includes(o.status)).length;
   const fulfillmentRate = ordersList.length > 0 ? Math.round((ordersList.filter(o => o.status === "delivered").length / ordersList.length) * 100) : 0;
@@ -381,7 +379,6 @@ export default function App() {
   const cartDeliveryFee = cartSubtotal > 0 && cartSubtotal < 300 ? 50 : 0;
   const cartTotal = cartSubtotal + cartDeliveryFee;
   const cartItemCount = cart.reduce((acc, i) => acc + i.quantity, 0);
-  const lowStockItems = products.filter(p => p.stock > 0 && p.stock <= 10);
 
   const getIcon = (status: string) => ({ pending: "🟡", processing: "🔵", out_for_delivery: "🟠", delivered: "🟢", cancelled: "🔴" }[status] || "⚪");
 
@@ -457,7 +454,6 @@ export default function App() {
     );
   }
 
-  // Main App (unchanged from previous version)
   return (
     <div className="app">
       {toastMsg && <div className="toast-container"><div className={`toast ${toastMsg.type}`}>✨ {toastMsg.msg}</div></div>}
