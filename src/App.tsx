@@ -17,6 +17,15 @@ type Product = { id: number; name: string; price: number; stock: number };
 type CartItem = Product & { quantity: number };
 type OrderStatus = "pending" | "processing" | "out_for_delivery" | "delivered" | "cancelled";
 
+type Rider = {
+  id: string;
+  name: string;
+  mobile: string;
+  email?: string;
+  status: "active" | "inactive";
+  createdAt: Date;
+};
+
 type ReceiptInfo = {
   orderId: number;
   total: number;
@@ -29,13 +38,12 @@ type ReceiptInfo = {
   date: Date;
 };
 
-const DRIVERS = ["Unassigned", "Kuya Juan", "Kuya Pedro", "Mang Jose"];
-
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isLoginView, setIsLoginView] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [toastMsg, setToastMsg] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Auth States
   const [mobile, setMobile] = useState("");
@@ -51,12 +59,13 @@ export default function App() {
   const [receipt, setReceipt] = useState<ReceiptInfo | null>(null);
   const [ordersList, setOrdersList] = useState<ReceiptInfo[]>([]);
   const [registeredUsers, setRegisteredUsers] = useState<any[]>([]);
+  const [riders, setRiders] = useState<Rider[]>([]);
 
   // Admin CRM
   const [selectedAdminUser, setSelectedAdminUser] = useState<any>(null);
 
   // Navigation
-  const [activeTab, setActiveTab] = useState<"store" | "orders" | "overview" | "inventory" | "users" | "settings">("store");
+  const [activeTab, setActiveTab] = useState<"store" | "orders" | "overview" | "riders" | "inventory" | "users" | "settings">("store");
   const [orderFilter, setOrderFilter] = useState<OrderStatus | "all">("all");
 
   // Product Management
@@ -65,9 +74,15 @@ export default function App() {
   const [productPrice, setProductPrice] = useState<number | "">("");
   const [productStock, setProductStock] = useState<number | "">("");
 
+  // Rider Management
+  const [riderName, setRiderName] = useState("");
+  const [riderMobile, setRiderMobile] = useState("");
+  const [riderEmail, setRiderEmail] = useState("");
+
   // Modals
   const [confirmDeleteProduct, setConfirmDeleteProduct] = useState<number | null>(null);
   const [confirmCancelOrder, setConfirmCancelOrder] = useState<number | null>(null);
+  const [confirmDeleteRider, setConfirmDeleteRider] = useState<string | null>(null);
 
   // Settings
   const [shopLocationUrl, setShopLocationUrl] = useState("");
@@ -86,7 +101,7 @@ export default function App() {
 
   const fetchSettings = async () => {
     const { data } = await supabase.from("settings").select("value").eq("key", "shop_location").maybeSingle();
-    const url = data?.value || "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3932.748057288636!2d123.2981503147915!3d9.3086933933256!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x33ab6ed77dafa4a3%3A0x6b8801c367cf80b4!2sDumaguete%2C%20Negros%20Oriental!5e0!3m2!1sen!2sph!4v1680000000000!5m2!1sen!2sph";
+    const url = data?.value || "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3932.748!2d123.2787025!3d9.3599451!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x33ab6fe703de90f1:0x767b7f4b09b8dce1!2sAqua%20Fria!5e0!3m2!1sen!2sph!4v1680000000000";
     setShopLocationUrl(url);
     setEditLocationUrl(url);
   };
@@ -131,15 +146,41 @@ export default function App() {
     setRegisteredUsers(data || []);
   };
 
+  const fetchRiders = async () => {
+    const { data } = await supabase.from("riders").select("*").order("created_at", { ascending: false });
+    setRiders(data?.map((r: any) => ({ ...r, createdAt: new Date(r.created_at) })) || []);
+  };
+
   useEffect(() => {
     fetchProducts();
     fetchSettings();
+    
+    // Real-time subscription to settings changes
+    const settingsSubscription = supabase
+      .channel("settings-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "settings", filter: "key=eq.shop_location" },
+        (payload: any) => {
+          if (payload.new?.value) {
+            setShopLocationUrl(payload.new.value);
+          }
+        }
+      )
+      .subscribe();
+    
+    return () => {
+      supabase.removeChannel(settingsSubscription);
+    };
   }, []);
 
   useEffect(() => {
     if (user) {
       fetchOrders();
-      if (user.role === "admin") fetchUsers();
+      if (user.role === "admin") {
+        fetchUsers();
+        fetchRiders();
+      }
     }
   }, [user, activeTab]);
 
@@ -292,6 +333,51 @@ export default function App() {
     setIsLoading(false);
   };
 
+  // --- RIDER MANAGEMENT ---
+  const handleAddRider = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!riderName || !riderMobile) {
+      showToast("Name and mobile are required", "error");
+      return;
+    }
+    setIsLoading(true);
+
+    const { error } = await supabase.from("riders").insert([{
+      name: riderName,
+      mobile: riderMobile,
+      email: riderEmail || null,
+      status: "active"
+    }]);
+
+    if (!error) {
+      showToast("Rider registered successfully!");
+      fetchRiders();
+      setRiderName("");
+      setRiderMobile("");
+      setRiderEmail("");
+    } else {
+      showToast("Failed to register rider", "error");
+    }
+    setIsLoading(false);
+  };
+
+  const handleDeleteRider = async () => {
+    if (!confirmDeleteRider) return;
+    setIsLoading(true);
+    await supabase.from("riders").delete().eq("id", confirmDeleteRider);
+    fetchRiders();
+    setConfirmDeleteRider(null);
+    setIsLoading(false);
+    showToast("Rider deleted");
+  };
+
+  const toggleRiderStatus = async (riderId: string, currentStatus: string) => {
+    const newStatus = currentStatus === "active" ? "inactive" : "active";
+    await supabase.from("riders").update({ status: newStatus }).eq("id", riderId);
+    fetchRiders();
+    showToast(`Rider ${newStatus}`);
+  };
+
   // --- CART & ORDER ---
   const handleCart = (product: Product, delta: number) => {
     setCart(prev => {
@@ -395,7 +481,7 @@ export default function App() {
   if (!user) {
     return (
       <div className="login-page">
-        {toastMsg && <div className="toast-container"><div className={`toast ${toastMsg.type}`}>✨ {toastMsg.msg}</div></div>}
+        {toastMsg && <div className="toast-container"><div className={`toast ${toastMsg.type}`}>{toastMsg.msg}</div></div>}
 
         <div className="login-card">
           <div className="login-logo">
@@ -456,7 +542,7 @@ export default function App() {
 
   return (
     <div className="app">
-      {toastMsg && <div className="toast-container"><div className={`toast ${toastMsg.type}`}>✨ {toastMsg.msg}</div></div>}
+      {toastMsg && <div className="toast-container"><div className={`toast ${toastMsg.type}`}>{toastMsg.msg}</div></div>}
 
       {/* Receipt Modal */}
       {receipt && (
@@ -485,7 +571,7 @@ export default function App() {
       {selectedAdminUser && (
         <div className="modal-overlay">
           <div className="receipt-card" style={{ maxWidth: "520px" }}>
-            <h2>👤 Customer Profile</h2>
+            <h2>Customer Profile</h2>
             <div style={{ margin: "1.5rem 0" }}>
               <p><strong>Name:</strong> {selectedAdminUser.name}</p>
               <p><strong>Mobile:</strong> {selectedAdminUser.mobile}</p>
@@ -499,11 +585,14 @@ export default function App() {
 
       {/* Header */}
       <header className="app-header">
-        <div className="logo">
-          <span className="logo-icon">💧</span>
-          <div className="logo-title">
-            <span>Aqua Fria</span>
-            <span>{user.role === "admin" ? "Dispatch Center" : "Customer Portal"}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <button className="menu-btn" onClick={() => setMenuOpen(!menuOpen)}>☰</button>
+          <div className="logo">
+            <span className="logo-icon">💧</span>
+            <div className="logo-title">
+              <span>Aqua Fria</span>
+              <span>{user.role === "admin" ? "Admin Panel" : "Customer Portal"}</span>
+            </div>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
@@ -514,26 +603,29 @@ export default function App() {
 
       <div className="app-body">
         {/* Desktop Navigation */}
-        <nav className="navigation">
+        <nav className={`navigation ${menuOpen ? "open" : ""}`}>
           {user.role === "admin" ? (
             <>
-              <a className={activeTab === "overview" ? "active" : ""} onClick={() => setActiveTab("overview")}>📊 Dispatch Board</a>
-              <a className={activeTab === "inventory" ? "active" : ""} onClick={() => { setActiveTab("inventory"); setSearchQuery(""); }}>📦 Inventory</a>
-              <a className={activeTab === "users" ? "active" : ""} onClick={() => { setActiveTab("users"); setSearchQuery(""); }}>👥 Customers</a>
-              <a className={activeTab === "settings" ? "active" : ""} onClick={() => setActiveTab("settings")}>⚙️ Settings</a>
+              <a className={activeTab === "store" ? "active" : ""} onClick={() => { setActiveTab("store"); setSearchQuery(""); setMenuOpen(false); }}><span className="nav-icon">🏪</span> Shop</a>
+              <a className={activeTab === "overview" ? "active" : ""} onClick={() => { setActiveTab("overview"); setMenuOpen(false); }}><span className="nav-icon">📊</span> Dashboard</a>
+              <a className={activeTab === "riders" ? "active" : ""} onClick={() => { setActiveTab("riders"); setMenuOpen(false); }}><span className="nav-icon">🚴</span> Riders</a>
+              <a className={activeTab === "orders" ? "active" : ""} onClick={() => { setActiveTab("orders"); setMenuOpen(false); }}><span className="nav-icon">📦</span> Orders</a>
+              <a className={activeTab === "inventory" ? "active" : ""} onClick={() => { setActiveTab("inventory"); setSearchQuery(""); setMenuOpen(false); }}><span className="nav-icon">📦</span> Inventory</a>
+              <a className={activeTab === "users" ? "active" : ""} onClick={() => { setActiveTab("users"); setSearchQuery(""); setMenuOpen(false); }}><span className="nav-icon">👥</span> Customers</a>
+              <a className={activeTab === "settings" ? "active" : ""} onClick={() => { setActiveTab("settings"); setMenuOpen(false); }}><span className="nav-icon">⚙️</span> Settings</a>
             </>
           ) : (
             <>
-              <a className={activeTab === "store" ? "active" : ""} onClick={() => { setActiveTab("store"); setSearchQuery(""); }}>🏪 Shop {cartItemCount > 0 && <span className="nav-badge">{cartItemCount}</span>}</a>
-              <a className={activeTab === "orders" ? "active" : ""} onClick={() => setActiveTab("orders")}>🚚 My Orders</a>
+              <a className={activeTab === "store" ? "active" : ""} onClick={() => { setActiveTab("store"); setSearchQuery(""); setMenuOpen(false); }}><span className="nav-icon">🏪</span> Shop {cartItemCount > 0 && <span className="nav-badge">{cartItemCount}</span>}</a>
+              <a className={activeTab === "orders" ? "active" : ""} onClick={() => { setActiveTab("orders"); setMenuOpen(false); }}><span className="nav-icon">📦</span> My Orders</a>
             </>
           )}
         </nav>
 
         {/* Main Content */}
         <main className="service-section">
-          {/* Customer Store */}
-          {user.role === "customer" && activeTab === "store" && (
+          {/* Store View - Available to both customer and admin */}
+          {activeTab === "store" && (
             <>
               <div className="store-hero">
                 <div className="store-hero-map">
@@ -556,8 +648,8 @@ export default function App() {
                     {p.stock === 0 && <div className="stock-badge stock-out">Out of Stock</div>}
                     <h3>{p.name}</h3>
                     <div className="price">₱{p.price}</div>
-                    <button className="flat-button primary" onClick={() => handleCart(p, 1)} disabled={p.stock === 0}>
-                      {p.stock === 0 ? "Out of Stock" : "Add to Cart"}
+                    <button className="flat-button primary" onClick={() => handleCart(p, 1)} disabled={p.stock === 0 || user.role === "admin"}>
+                      {p.stock === 0 ? "Out of Stock" : user.role === "admin" ? "Admin View" : "Add to Cart"}
                     </button>
                   </div>
                 ))}
@@ -568,44 +660,11 @@ export default function App() {
           {/* Admin Overview */}
           {user.role === "admin" && activeTab === "overview" && (
             <div>
-              <h2 className="section-title">Executive Dashboard</h2>
+              <h2 className="section-title">Dashboard</h2>
               <div className="stats-grid">
                 <div className="stat-card"><span className="value">₱{adminTotalRev.toLocaleString()}</span><span>Total Revenue</span></div>
                 <div className="stat-card"><span className="value">{adminActiveOrders}</span><span>Active Orders</span></div>
                 <div className="stat-card"><span className="value">{fulfillmentRate}%</span><span>Fulfillment Rate</span></div>
-              </div>
-
-              <h2>Live Dispatch Board</h2>
-              <div className="filter-pills">
-                {["all", "pending", "processing", "out_for_delivery", "delivered"].map(f => (
-                  <button key={f} className={`filter-pill ${orderFilter === f ? "active" : ""}`} onClick={() => setOrderFilter(f as any)}>
-                    {f.replace("_", " ").toUpperCase()}
-                  </button>
-                ))}
-              </div>
-
-              <div className="transfers">
-                {filteredOrders.map(order => (
-                  <div key={order.orderId} className="transfer">
-                    <div className="transfer-logo">{getIcon(order.status)}</div>
-                    <div className="transfer-details">
-                      <div><dd>Customer</dd><span>{order.customerName}</span></div>
-                      <div>
-                        <dd>Driver</dd>
-                        <select value={order.driver || "Unassigned"} onChange={e => updateOrderStatus(order.orderId, order.status, e.target.value)}>
-                          {DRIVERS.map(d => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <dd>Action</dd>
-                        {order.status === "pending" && <button className="flat-button primary" onClick={() => handleQuickAction(order.orderId, order.status)}>Accept</button>}
-                        {order.status === "processing" && <button className="flat-button" onClick={() => handleQuickAction(order.orderId, order.status)}>Dispatch</button>}
-                        {order.status === "out_for_delivery" && <button className="flat-button" onClick={() => handleQuickAction(order.orderId, order.status)}>Delivered</button>}
-                      </div>
-                    </div>
-                    <div className="transfer-number">₱{order.total}</div>
-                  </div>
-                ))}
               </div>
             </div>
           )}
@@ -613,7 +672,7 @@ export default function App() {
           {/* Admin Inventory */}
           {user.role === "admin" && activeTab === "inventory" && (
             <div>
-              <h2 className="section-title">Inventory Management</h2>
+              <h2 className="section-title">Inventory</h2>
               <input type="text" className="search-bar" placeholder="Search products..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
               <div className="tiles">
                 {searchedProducts.map(p => (
@@ -630,10 +689,43 @@ export default function App() {
             </div>
           )}
 
+          {/* Admin Riders */}
+          {user.role === "admin" && activeTab === "riders" && (
+            <div>
+              <h2 className="section-title">Riders Management</h2>
+              <div className="transfers">
+                {riders.length === 0 ? (
+                  <p>No riders registered yet.</p>
+                ) : (
+                  riders.map(rider => (
+                    <div key={rider.id} className="transfer">
+                      <div className="transfer-logo">🚴</div>
+                      <div className="transfer-details">
+                        <div><strong>{rider.name}</strong></div>
+                        <div>{rider.mobile}</div>
+                        <div><small>{rider.email || "No email"}</small></div>
+                      </div>
+                      <div className="transfer-number">
+                        <button 
+                          className={`flat-button ${rider.status === "active" ? "primary" : ""}`}
+                          onClick={() => toggleRiderStatus(rider.id, rider.status)}
+                          style={{ marginBottom: "8px" }}
+                        >
+                          {rider.status === "active" ? "Active" : "Inactive"}
+                        </button>
+                        <button className="flat-button danger" onClick={() => setConfirmDeleteRider(rider.id)}>Delete</button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Admin Users */}
           {user.role === "admin" && activeTab === "users" && (
             <div>
-              <h2 className="section-title">Customer Database</h2>
+              <h2 className="section-title">Customers</h2>
               <input type="text" className="search-bar" placeholder="Search customers..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
               <div className="transfers">
                 {registeredUsers
@@ -648,6 +740,50 @@ export default function App() {
                       <div className="transfer-number">₱{getUserStats(u.mobile).totalSpent}</div>
                     </div>
                   ))}
+              </div>
+            </div>
+          )}
+
+          {/* Admin Orders */}
+          {user.role === "admin" && activeTab === "orders" && (
+            <div>
+              <h2 className="section-title">Orders</h2>
+              <div className="filter-pills">
+                {["all", "pending", "processing", "out_for_delivery", "delivered"].map(f => (
+                  <button key={f} className={`filter-pill ${orderFilter === f ? "active" : ""}`} onClick={() => setOrderFilter(f as any)}>
+                    {f.replace("_", " ").toUpperCase()}
+                  </button>
+                ))}
+              </div>
+
+              <div className="transfers">
+                {filteredOrders.length === 0 ? (
+                  <p>No orders found.</p>
+                ) : (
+                  filteredOrders.map(order => (
+                    <div key={order.orderId} className="transfer">
+                      <div className="transfer-logo">{getIcon(order.status)}</div>
+                      <div className="transfer-details">
+                        <div><strong>Order #{order.orderId}</strong></div>
+                        <div>{order.customerName} • {order.customerMobile}</div>
+                        <div>
+                          <select value={order.driver || "Unassigned"} onChange={e => updateOrderStatus(order.orderId, order.status, e.target.value)} style={{ padding: "4px" }}>
+                            <option value="Unassigned">Unassigned</option>
+                            {riders.filter(r => r.status === "active").map(r => (
+                              <option key={r.id} value={r.name}>{r.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="transfer-number">
+                        ₱{order.total}
+                        {order.status === "pending" && <button className="flat-button primary" style={{ marginTop: "8px" }} onClick={() => handleQuickAction(order.orderId, order.status)}>Accept</button>}
+                        {order.status === "processing" && <button className="flat-button" style={{ marginTop: "8px" }} onClick={() => handleQuickAction(order.orderId, order.status)}>Dispatch</button>}
+                        {order.status === "out_for_delivery" && <button className="flat-button" style={{ marginTop: "8px" }} onClick={() => handleQuickAction(order.orderId, order.status)}>Delivered</button>}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}
@@ -669,7 +805,7 @@ export default function App() {
           {/* Customer Orders */}
           {user.role === "customer" && activeTab === "orders" && (
             <div>
-              <h2 className="section-title">My Orders</h2>
+              <h2 className="section-title">Orders</h2>
               <div className="transfers">
                 {ordersList.length === 0 ? <p>No orders yet.</p> : ordersList.map(order => (
                   <div key={order.orderId} className="transfer">
@@ -700,6 +836,18 @@ export default function App() {
                 <div className="form-group"><label>Price (₱)</label><input type="number" className="custom-input" value={productPrice} onChange={e => setProductPrice(Number(e.target.value))} required /></div>
                 <div className="form-group"><label>Stock</label><input type="number" className="custom-input" value={productStock} onChange={e => setProductStock(Number(e.target.value))} required /></div>
                 <button type="submit" className="flat-button primary" disabled={isLoading}>Save Product</button>
+              </form>
+            </div>
+          )}
+
+          {user.role === "admin" && activeTab === "riders" && (
+            <div className="cart-card">
+              <h2>Register Rider</h2>
+              <form onSubmit={handleAddRider}>
+                <div className="form-group"><label>Full Name</label><input type="text" className="custom-input" value={riderName} onChange={e => setRiderName(e.target.value)} required /></div>
+                <div className="form-group"><label>Mobile Number</label><input type="tel" className="custom-input" value={riderMobile} onChange={e => setRiderMobile(e.target.value)} required /></div>
+                <div className="form-group"><label>Email (optional)</label><input type="email" className="custom-input" value={riderEmail} onChange={e => setRiderEmail(e.target.value)} /></div>
+                <button type="submit" className="flat-button primary" disabled={isLoading}>Register Rider</button>
               </form>
             </div>
           )}
@@ -749,14 +897,14 @@ export default function App() {
       </div>
 
       {/* Confirm Modal */}
-      {(confirmDeleteProduct || confirmCancelOrder) && (
+      {(confirmDeleteProduct || confirmCancelOrder || confirmDeleteRider) && (
         <div className="modal-overlay">
           <div className="confirm-card">
             <h3>Are you sure?</h3>
             <p>This action cannot be undone.</p>
             <div style={{ display: "flex", gap: "1rem", marginTop: "1.5rem" }}>
-              <button className="flat-button" onClick={() => { setConfirmDeleteProduct(null); setConfirmCancelOrder(null); }}>Cancel</button>
-              <button className="flat-button danger" onClick={confirmDeleteProduct ? handleDeleteProduct : handleCancelOrder}>Confirm</button>
+              <button className="flat-button" onClick={() => { setConfirmDeleteProduct(null); setConfirmCancelOrder(null); setConfirmDeleteRider(null); }}>Cancel</button>
+              <button className="flat-button danger" onClick={confirmDeleteProduct ? handleDeleteProduct : confirmCancelOrder ? handleCancelOrder : handleDeleteRider}>Confirm</button>
             </div>
           </div>
         </div>
